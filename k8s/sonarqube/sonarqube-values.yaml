@@ -1,0 +1,31 @@
+jdbc:
+  url: jdbc:postgresql://sonardb-postgresql:5432/sonarqube
+  username: sonar
+  password: sonarpass
+
+service:
+  type: NodePort
+  port: 9000
+  nodePort: 30900
+
+persistence:
+  enabled: true
+  size: 5Gi
+
+resources:
+  limits:
+    cpu: 2000m
+    memory: 3Gi
+  requests:
+    cpu: 500m
+    memory: 2Gi
+
+monitoringPasscode: "xxxxxxx"
+community: 
+  enabled: true
+
+postgresql:
+  enabled: true
+  persistence:
+    enabled: true
+    size: 5Gi

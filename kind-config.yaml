@@ -1,0 +1,33 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+- role: control-plane
+  extraPortMappings:
+
+  # Sonarqube
+  - containerPort: 30900
+    hostPort: 9000
+
+  # Dependency Track Frontend
+  - containerPort: 30801
+    hostPort: 8081
+
+  # Dependency Track API
+  - containerPort: 30101
+    hostPort: 4001
+
+  # Faraday
+  - containerPort: 30802
+    hostPort: 8082
+
+  # Archery
+  - containerPort: 30803
+    hostPort: 8083
+
+  # Nodegoat
+  - containerPort: 30804
+    hostPort: 8084
+
+  # Reserved
+  - containerPort: 30805
+    hostPort: 8085

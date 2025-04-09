@@ -1,0 +1,15 @@
+name: test
+
+on: push
+
+jobs:
+  print-something:
+    name: CI
+    runs-on: [arc-runner-set]
+    steps:
+      - name: Echo test
+        run: |
+          echo "Aula de DevSecOps"
+      - name: Create dir
+        run: |
+          mkdir test
