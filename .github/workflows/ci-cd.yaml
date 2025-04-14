@@ -1,0 +1,58 @@
+name: ci-cd
+
+on: [pull_request]
+
+jobs:
+
+#########################################################################
+##                                  CI
+#########################################################################
+
+  trufflehog-secrets-scanning:
+    name: Secret Scanning - TruffleHog
+    runs-on: [arc-runner-set]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: TruffleHog OSS
+        uses: trufflesecurity/trufflehog@main
+        with:
+          extra_args: --results=verified,unknown,unverified
+
+  trivy-secrets-scanning:
+    name: Secret Scanning - Trivy
+    runs-on: [arc-runner-set]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        # with:
+        #   fetch-depth: 0
+        
+      - name: Detect Secrets with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          hide-progress: true
+          format: table
+          output: trivy.txt
+          exit-code: 1
+          scanners: secret
+
+      - name: Publish Trivy Secrets Results
+        if: always()
+        run: |
+          if [[ -s trivy.txt ]]; then
+            {
+              echo "### Security Output"
+              echo "<details><summary>Click to expand</summary>"
+              echo ""
+              echo '```terraform'
+              cat trivy.txt
+              echo '```'
+              echo "</details>"
+            } >> $GITHUB_STEP_SUMMARY
+          fi
