@@ -41,6 +41,7 @@ jobs:
           output: trivy.txt
           exit-code: 1
           scanners: secret
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
 
       - name: Publish Trivy Secrets Results
         if: always()
@@ -56,3 +57,43 @@ jobs:
               echo "</details>"
             } >> $GITHUB_STEP_SUMMARY
           fi
+
+  dependency-check:
+    name: SCA - Syft, Dependency Track
+    runs-on: [arc-runner-set]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - uses: anchore/sbom-action@v0
+        name: Generate SBOM File with Syft
+        with:
+          artifact-name: sbom-cyclonedx.json
+          format: cyclonedx-json
+          upload-artifact: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          output-file: "${{ github.workspace }}/sbom-cyclonedx.json"
+
+      # - name: Upload SBOM to Dependency Track
+      #   run: |
+      #     curl -i -X POST "http://dependencytrack-dependency-track-api-server.dependencytrack:8080/api/v1/bom" \
+      #       -H 'Content-Type: multipart/form-data' \
+      #       -H "X-Api-Key: ${{ secrets.DEPENDENCYTRACK_APIKEY }}" \
+      #       -H "Content-Type: application/json" \
+      #       -F "projectName=app" \
+      #       -F "autoCreate=true" \
+      #       -F "projectVersion=main" \
+      #       -F "bom=@${{ github.workspace }}/sbom-cyclonedx.json"
+
+      - uses: DependencyTrack/gh-upload-sbom@v3
+        name: Upload SBOM to Dependency Track
+        if: always()
+        with:
+          serverHostname: 'dependencytrack-dependency-track-api-server.dependencytrack'
+          port: '8080'
+          protocol: 'http'
+          apiKey: ${{ secrets.DEPENDENCYTRACK_APIKEY }}
+          projectName: 'app'
+          projectVersion: ${{ github.head_ref }} 
+          bomFilename: "${{ github.workspace }}/sbom-cyclonedx.json"
+          autoCreate: true
