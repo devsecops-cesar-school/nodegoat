@@ -97,3 +97,41 @@ jobs:
           projectVersion: ${{ github.head_ref }} 
           bomFilename: "${{ github.workspace }}/sbom-cyclonedx.json"
           autoCreate: true
+
+  sast-sonarqube:
+    name: SAST - Sonarqube
+    runs-on: [arc-runner-set]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run SonarScanner
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: http://sonarqube-sonarqube.sonarqube:9000
+          SONAR_PROJECT_KEY: app
+        run: |
+          docker run \
+            --network host \
+            --platform linux/amd64 \
+            --rm \
+            -e SONAR_HOST_URL="${SONAR_HOST_URL}" \
+            -e SONAR_TOKEN="${SONAR_TOKEN}" \
+            -v "$(pwd):/usr/src" \
+            sonarsource/sonar-scanner-cli \
+              -Dsonar.projectKey=app \
+              -Dsonar.projectName="DevSecOps App" \
+              -Dsonar.sources=${SONAR_PROJECT_KEY}
+
+          sleep 10
+          STATUS=$(curl -s -u ${SONAR_TOKEN}: -G --data-urlencode --data-urlencode \
+            "${SONAR_HOST_URL}/api/qualitygates/project_status?projectKey=${SONAR_PROJECT_KEY}" \
+            | jq -r '.projectStatus.status')
+
+          if [ "${STATUS}" != "OK" ]; then
+            echo "❌ Quality Gate failed with status: ${STATUS}"
+            exit 1
+          else
+            echo "✅ Quality Gate passed"
+          fi
+
