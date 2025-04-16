@@ -164,7 +164,7 @@ setup-github-runners:
       --set githubConfigUrl="${GITHUB_CONFIG_URL}" \
       --set githubConfigSecret="pre-defined-secret" \
       --set containerMode.type="dind" \
-      --set minRunners=5 \
+      --set minRunners=0 \
       --set maxRunners=10 \
       oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set
   kubectl create secret generic pre-defined-secret \
