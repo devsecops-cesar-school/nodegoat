@@ -135,3 +135,67 @@ jobs:
             echo "✅ Quality Gate passed"
           fi
 
+  iac-scanning:
+    name: IaC Scanning - checkov, archerysec, trivy
+    runs-on: [arc-runner-set]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Detect IaC issues with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+            scan-type: fs
+            scan-ref: .
+            hide-progress: true
+            format: json
+            output: trivy.json
+            exit-code: 0
+            scanners: vuln,misconfig,secret,license
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13' 
+
+      - name: Upload Results to ArcherySec
+        run: |
+          pip install archerysec-cli setuptools
+
+          PROJECT_ID=$(archerysec-cli -h http://archerysec-app.archerysec \
+                        -t "${{ secrets.ARCHERYSEC_APIKEY }}" \
+                        --createproject \
+                        --project_name="app" \
+                        --project_disc="app project" \
+                        |grep project_id \
+                        |jq -r '.project_id')
+
+          archerysec-cli -h http://archerysec-app.archerysec \
+            -t "${{ secrets.ARCHERYSEC_APIKEY }}" \
+            --project="${PROJECT_ID}" \
+            --scanner=trivy \
+            --target=main \
+            --upload \
+            --file-type=JSON \
+            -p trivy.json
+
+      - name: Run Checkov for IaC Scanning
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: .
+          framework: terraform,kubernetes,dockerfile
+          output_format: cli,sarif
+          output_file_path: console,iac-scanning-results.sarif
+
+      ## Requires Github Advanced Security
+      # - name: Upload Checkov Results
+      #   if: always()
+      #   uses: github/codeql-action/upload-sarif@v2
+      #   with:
+      #     sarif_file: iac-scanning-results.sarif
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: iac-scanning-results.sarif
+          path: iac-scanning-results.sarif
