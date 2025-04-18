@@ -1,0 +1,38 @@
+name: production
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["ci-cd"]
+    types:
+      - completed
+
+jobs:
+  deploy-production:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+    name: DEPLOY - production
+    runs-on: [arc-runner-set]
+    steps:
+      - name: Repo Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Kubernetes CLI Tools
+        uses: alexellis/arkade-get@master
+        with:
+          kubectl: latest
+
+      # kind get kubeconfig --name devsecops
+      # change kubeconfig api server to https://kubernetes.default:443, convert the file to base64 and add to github secrets (secrets.KUBECONFIG)
+      - name: Configure access to Kubernetes
+        run: |
+          echo "${{ secrets.KUBECONFIG }}" | base64 -d > kubeconfig
+          echo "KUBECONFIG=$(pwd)/kubeconfig" >> $GITHUB_ENV
+
+      - name: Deploy Nodegoat
+        run: |
+          NAMESPACE="nodegoat"
+          kubectl create ns ${NAMESPACE} || true
+          kubectl apply -n ${NAMESPACE} -f k8s/nodegoat/
+

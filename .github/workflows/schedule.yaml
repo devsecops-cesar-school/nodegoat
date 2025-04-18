@@ -1,0 +1,151 @@
+name: scheduled scanning
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  trivy-scan:
+    name: SCAN | SCA/SAST/IaC | Trivy
+    runs-on: [arc-runner-set]
+    steps:
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - uses: anchore/sbom-action@v0
+        name: Generate SBOM File with Syft
+        with:
+          artifact-name: sbom-cyclonedx.json
+          format: cyclonedx-json
+          upload-artifact: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          output-file: "${{ github.workspace }}/sbom-cyclonedx.json"
+  
+      - uses: DependencyTrack/gh-upload-sbom@v3
+        name: Upload SBOM to Dependency Track
+        if: always()
+        with:
+          serverHostname: 'dependencytrack-dependency-track-api-server.dependencytrack'
+          port: '8080'
+          protocol: 'http'
+          apiKey: ${{ secrets.DEPENDENCYTRACK_APIKEY }}
+          projectName: 'app'
+          projectVersion: 'main'
+          bomFilename: "${{ github.workspace }}/sbom-cyclonedx.json"
+          autoCreate: true
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker pull
+        run: docker pull ${{ secrets.DOCKERHUB_USERNAME }}/devsecops-nodegoat:latest
+
+      - name: Run Trivy Vulnerability Scanner to Generate Table Output
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/devsecops-nodegoat:latest
+          scan-type: image
+          hide-progress: true
+          format: table
+          output: trivy.txt
+          exit-code: 1
+          # ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+          scanners: vuln,secret,misconfig,license
+
+      - name: Publish Trivy Output to Summary
+        if: always()
+        run: |
+          if [[ -s trivy.txt ]]; then
+            {
+              echo "### Security Output"
+              echo "<details><summary>Click to expand</summary>"
+              echo ""
+              echo '```terraform'
+              cat trivy.txt
+              echo '```'
+              echo "</details>"
+            } >> $GITHUB_STEP_SUMMARY
+          fi
+
+  nuclei-scan:
+    runs-on: [arc-runner-set]
+    name: SCAN | DAST | Nuclei
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Nuclei - Vulnerability Scan
+        id: nuclei_scan
+        uses: projectdiscovery/nuclei-action@main
+        with:
+          target: http://nodegoat-web.nodegoat
+          flags: "-severity critical,high,medium,low -stats"
+
+      - name: GitHub Workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuclei.log
+          path: nuclei.log
+
+      # - name: GitHub Security Dashboard Alerts update
+      #   uses: github/codeql-action/upload-sarif@v3
+      #   if: steps.nuclei_scan.outputs.sarif_exists == 'true'
+      #   with:
+      #     sarif_file: nuclei.sarif
+      #   env:
+      #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  scan_nikto:
+    runs-on: [arc-runner-set]
+    name: SCAN | DAST | Nikto
+    steps:
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Scan with Nikto
+        run: |
+          git clone https://github.com/sullo/nikto
+          cd nikto
+          docker build -t sullo/nikto .
+          docker run --name nikto \
+            sullo/nikto \
+              -h http://nodegoat-web.nodegoat \
+              -o /tmp/nikto_report.htm
+          docker cp nikto:/tmp/nikto_report.htm ${{ github.workspace }}/nikto_report.htm
+
+      - name: Upload Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nikto_scan
+          path: nikto_report.htm
+
+  dast-owasp-zap-scanning:
+    name: SCAN | DAST | OWASP Zap
+    runs-on: [arc-runner-set]
+    steps:
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: ZAP Scan
+        # uses: zaproxy/action-full-scan@v0.12.0 # for full scan
+        uses: zaproxy/action-baseline@v0.14.0
+        with:
+          docker_name: 'ghcr.io/zaproxy/zaproxy:stable'
+          target: 'http://nodegoat-web.nodegoat'
+          cmd_options: '-n owasp-zap.context -U admin -l WARN'
+          fail_action: 'true'
+          allow_issue_writing: 'false'
+          artifact_name: 'zap_scan'
+        

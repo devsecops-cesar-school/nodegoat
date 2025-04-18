@@ -75,6 +75,7 @@ start-dependency-track:
     --set frontend.service.type="NodePort" \
     --set frontend.service.nodePort=30801 \
     --set frontend.apiBaseUrl="http://localhost:4001" \
+    --set apiServer.metrics.enabled=true \
     --set apiServer.persistentVolume.enabled="true" \
     --set apiServer.persistentVolume.size="2Gi" \
     --set apiServer.service.nodePort=30101 \
@@ -113,12 +114,38 @@ start-archerysec:
   NAMESPACE="archerysec"
   kubectl create ns ${NAMESPACE} || true
   kubectl apply -n ${NAMESPACE} -f k8s/archery/
-# Start archerysec
+# Stop archerysec
 stop-archerysec:
   #!/usr/bin/env bash
   set -euo pipefail
   NAMESPACE="archerysec"
   kubectl delete -n ${NAMESPACE} -f k8s/archery/
+
+
+# Start Monitoring
+start-monitoring:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  NAMESPACE="monitoring"
+  kubectl create ns ${NAMESPACE} || true
+  helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+  helm repo add grafana https://grafana.github.io/helm-charts
+  helm repo update
+  helm upgrade --install prometheus prometheus-community/prometheus \
+    --namespace ${NAMESPACE} \
+    --create-namespace \
+    -f k8s/prometheus/values.yaml
+  helm upgrade --install grafana grafana/grafana \
+    --namespace ${NAMESPACE} \
+    --create-namespace \
+    -f k8s/grafana/values.yaml
+# Stop monitoring
+stop-monitoring:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  NAMESPACE="monitoring"
+  helm uninstall -n ${NAMESPACE} grafana || true
+  helm uninstall -n ${NAMESPACE} prometheus || true
 
 
 # Start all
@@ -164,7 +191,7 @@ setup-github-runners:
       --set githubConfigUrl="${GITHUB_CONFIG_URL}" \
       --set githubConfigSecret="pre-defined-secret" \
       --set containerMode.type="dind" \
-      --set minRunners=0 \
+      --set minRunners=5 \
       --set maxRunners=10 \
       oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set
   kubectl create secret generic pre-defined-secret \

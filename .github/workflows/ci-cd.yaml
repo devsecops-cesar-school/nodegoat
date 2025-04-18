@@ -199,3 +199,225 @@ jobs:
         with:
           name: iac-scanning-results.sarif
           path: iac-scanning-results.sarif
+
+  build:
+    name: Building Image
+    runs-on: [arc-runner-set]
+    steps:
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          push: true
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/devsecops-nodegoat:latest
+          platforms: linux/amd64,linux/arm64
+
+  sca-image-scanning:
+    name: Container Scanning - Trivy
+    runs-on: [arc-runner-set]
+    needs: build
+    steps:
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker pull
+        run: docker pull ${{ secrets.DOCKERHUB_USERNAME }}/devsecops-nodegoat:latest
+
+      - name: Run Trivy Vulnerability Scanner to Generate Table Output
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/devsecops-nodegoat:latest
+          scan-type: image
+          hide-progress: true
+          format: table
+          output: trivy.txt
+          exit-code: 1
+          # ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+          scanners: vuln
+
+      - name: Publish Trivy Output to Summary
+        if: always()
+        run: |
+          if [[ -s trivy.txt ]]; then
+            {
+              echo "### Security Output"
+              echo "<details><summary>Click to expand</summary>"
+              echo ""
+              echo '```terraform'
+              cat trivy.txt
+              echo '```'
+              echo "</details>"
+            } >> $GITHUB_STEP_SUMMARY
+          fi
+
+  license-scanning:
+    name: License Scanning - Trivy
+    runs-on: [arc-runner-set]
+    needs: build
+    steps:
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker pull
+        run: docker pull ${{ secrets.DOCKERHUB_USERNAME }}/devsecops-nodegoat:latest
+
+      - name: Run Trivy Vulnerability Scanner to Generate Table Output
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/devsecops-nodegoat:latest
+          scan-type: image
+          hide-progress: true
+          format: table
+          output: trivy.txt
+          exit-code: 1
+          vuln-type: os,library
+          severity: UNKNOWN,CRITICAL,HIGH
+          scanners: license
+
+      - name: Publish Trivy Output to Summary
+        if: always()
+        run: |
+          if [[ -s trivy.txt ]]; then
+            {
+              echo "### Security Output"
+              echo "<details><summary>Click to expand</summary>"
+              echo ""
+              echo '```terraform'
+              cat trivy.txt
+              echo '```'
+              echo "</details>"
+            } >> $GITHUB_STEP_SUMMARY
+          fi
+
+#########################################################################
+##                                  CD
+#########################################################################
+
+  deploy-staging:
+    name: DEPLOY - staging
+    runs-on: [arc-runner-set]
+    needs:
+      - build
+    steps:
+      - name: Repo Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Kubernetes CLI Tools
+        uses: alexellis/arkade-get@master
+        with:
+          kubectl: latest
+
+      # kind get kubeconfig --name devsecops
+      # change kubeconfig api server to https://kubernetes.default:443, convert the file to base64 and add to github secrets (secrets.KUBECONFIG)
+      - name: Configure access to Kubernetes
+        run: |
+          echo "${{ secrets.KUBECONFIG }}" | base64 -d > kubeconfig
+          echo "KUBECONFIG=$(pwd)/kubeconfig" >> $GITHUB_ENV
+
+      - name: Deploy Nodegoat
+        run: |
+          NAMESPACE="nodegoat"
+          kubectl create ns ${NAMESPACE} || true
+          kubectl apply -n ${NAMESPACE} -f k8s/nodegoat/
+
+  dast-owasp-zap-scanning:
+    name: DAST - OWASP zap
+    runs-on: [arc-runner-set]
+    needs: deploy-staging
+    steps:
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: ZAP Scan
+        # uses: zaproxy/action-full-scan@v0.12.0 # for full scan
+        uses: zaproxy/action-baseline@v0.14.0
+        with:
+          docker_name: 'ghcr.io/zaproxy/zaproxy:stable'
+          target: 'http://nodegoat-web.nodegoat'
+          cmd_options: '-n owasp-zap.context -U admin -l WARN'
+          fail_action: 'true'
+          allow_issue_writing: 'false'
+          artifact_name: 'zap_scan'
+
+  infra-scanning:
+    name: Infrastructure Scanning - Trivy
+    runs-on: [arc-runner-set]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure access to Kubernetes
+        run: |
+          echo "${{ secrets.KUBECONFIG }}" | base64 -d > kubeconfig
+          echo "KUBECONFIG=$(pwd)/kubeconfig" >> $GITHUB_ENV
+
+      - name: Install Trivy
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sudo sh -s -- -b /usr/local/bin
+    
+      - name: Scan Kubernetes cluster (summary)
+        run: |
+          trivy k8s \
+            --report summary \
+            --severity HIGH,CRITICAL \
+            --format table \
+            --output trivy-k8s-summary.txt \
+            kind-devsecops
+
+      - name: Generate detailed JSON report
+        run: |
+          trivy k8s \
+            --report all \
+            --severity HIGH,CRITICAL \
+            --format json \
+            --output trivy-k8s-report.json \
+            --exit-code 1 \
+            kind-devsecops
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-k8s-report
+          path: trivy-k8s-report.json
+
+      - name: Publish Trivy Output to Summary
+        if: always()
+        run: |
+          if [[ -s trivy-k8s-summary.txt ]]; then
+            {
+              echo "### Security Output"
+              echo "<details><summary>Click to expand</summary>"
+              echo ""
+              echo '```terraform'
+              cat trivy-k8s-summary.txt
+              echo '```'
+              echo "</details>"
+            } >> $GITHUB_STEP_SUMMARY
+          fi
